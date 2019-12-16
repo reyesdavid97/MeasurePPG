@@ -11,3 +11,5 @@ Version 1.0 of the app is installed onto Android smartwatches using Android Stud
 - Enter “com.example.measureppg” for the package name.
 - Enter SHA1 signing certificate you obtained from the signingReport earlier.
 - Press create.
+
+Video: https://www.youtube.com/watch?v=u_ameCYORHY
