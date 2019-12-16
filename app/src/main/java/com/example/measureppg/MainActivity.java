@@ -1,7 +1,9 @@
 package com.example.measureppg;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -36,24 +38,31 @@ import java.util.Locale;
 import java.util.Date;
 import java.sql.Timestamp;
 
-
 import androidx.annotation.NonNull;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 
 public class MainActivity extends WearableActivity implements SensorEventListener
 {
     private TextView mTextView;
     private static final String TAG = "MeasurePPG";
-    private String mOpenFileID;
     private String fileName;
-    private StringBuilder sensorData;
+    private String accFileID;
+    private String hrFileID;
+
+    private StringBuilder sensorDataACC; // Accelerometer data
+    private StringBuilder sensorDataHR; // Heart rate data
 
     public static final int REQUEST_CODE_SIGN_IN = 1;
     public static final int REQUEST_CODE_OPEN_DOCUMENT = 2;
+    public static final int REQUEST_CODE_PERMISSION_INTERNET = 3;
+    public static final int REQUEST_CODE_PERMISSION_SENSORS = 4;
+
 
     private SensorManager mSensorManager;
     private DriveServiceHelper mDriveServiceHelper;
 
-    private Sensor mHeartrateSensor;
+    private Sensor mHeartRateSensor;
     private Sensor mAccelerometer;
     private Sensor mGyroscope;
     private Sensor mStepDetector;
@@ -76,10 +85,15 @@ public class MainActivity extends WearableActivity implements SensorEventListene
         signInButton = findViewById(R.id.signInButton);
         configButton = findViewById(R.id.configButton);
 
-        sensorData = new StringBuilder();
-        //handles sign in (prompt)
+        sensorDataACC = new StringBuilder();
+        sensorDataHR = new StringBuilder();
+
+        // Handles sign in (prompt)
         checkAlreadySignedIn();
         signIn();
+
+        // Check for necessary permissions
+        checkPermissions();
 
         mSensorManager = (SensorManager)getSystemService(SENSOR_SERVICE);
         logAvailableSensors();
@@ -156,12 +170,14 @@ public class MainActivity extends WearableActivity implements SensorEventListene
         int numSensors = 0; // Number of sensors turned on
         if (ConfigActivity.ACC)
         {
-            mAccelerometer = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+            mAccelerometer = mSensorManager.getDefaultSensor(1);
+            createFile(1);
             numSensors++;
         }
         if (ConfigActivity.HR)
         {
-            mHeartrateSensor = mSensorManager.getDefaultSensor(Sensor.TYPE_HEART_RATE);
+            mHeartRateSensor = mSensorManager.getDefaultSensor(21);
+            createFile(21);
             numSensors++;
         }
 
@@ -175,13 +191,12 @@ public class MainActivity extends WearableActivity implements SensorEventListene
             return;
         }
 
-        createFile();
         if (mSensorManager != null)
         {
             Toast.makeText(this, "Starting measurement.", Toast.LENGTH_SHORT).show();
 
-            if (mHeartrateSensor != null)
-                mSensorManager.registerListener(this, mHeartrateSensor, 1000000); // Sampling period is in microseconds
+            if (mHeartRateSensor != null)
+                mSensorManager.registerListener(this, mHeartRateSensor, 1000000); // Sampling period is in microseconds
             else
                 Log.d(TAG, "No heart rate sensor.");
 
@@ -205,17 +220,35 @@ public class MainActivity extends WearableActivity implements SensorEventListene
             else
                 Log.d(TAG, "No heart beat sensor.");
         }
+
+        return;
     }
 
     // Unregisters sensor listener.
     private void stopMeasurement()
     {
-        saveFile();
         if (mSensorManager != null)
         {
-            mSensorManager.unregisterListener(this);
+            mSensorManager.unregisterListener(this, mHeartRateSensor);
+            mSensorManager.unregisterListener(this, mAccelerometer);
             Toast.makeText(this, "Stopping measurement.", Toast.LENGTH_SHORT).show();
         }
+
+        if(ConfigActivity.ACC)
+        {
+            fileName = getTimeStamp() + " Accelerometer.txt";
+            saveFile(fileName, sensorDataACC.toString(), accFileID);
+            sensorDataACC.setLength(0);
+        }
+
+        if(ConfigActivity.HR)
+        {
+            fileName = getTimeStamp() + " Heart Rate.txt";
+            saveFile(fileName, sensorDataHR.toString(), hrFileID);
+            sensorDataHR.setLength(0);
+        }
+
+        return;
     }
 
     // Appends sensor data on sensor change event to sensorData string builder.
@@ -225,18 +258,18 @@ public class MainActivity extends WearableActivity implements SensorEventListene
         Log.d(TAG, "" + event.sensor.getType() + " / " + event.accuracy + " / " + event.timestamp + " / " + event.values[0]);
         mTextView.setText("" + event.values[0]);
 
-        String timeStamp = getTimeStamp();
+        String timeStamp = getTimeOnly();
         if (event.sensor.getType() == 1) // Accelerometer is type 1 and has 3 values
         {
-            sensorData.append(timeStamp + "\t");
-            sensorData.append(event.values[0] + "\t");
-            sensorData.append(event.values[1] + "\t");
-            sensorData.append(event.values[2] + "\n");
+            sensorDataACC.append(timeStamp + "\t");
+            sensorDataACC.append(event.values[0] + "\t");
+            sensorDataACC.append(event.values[1] + "\t");
+            sensorDataACC.append(event.values[2] + "\n");
         }
-        else // Other sensor type only have 1 value
+        else if (event.sensor.getType() == 21) // Heart rate sensor
         {
-            sensorData.append(timeStamp + "\t");
-            sensorData.append(event.values[0] + "\n");
+            sensorDataHR.append(timeStamp + "\t");
+            sensorDataHR.append(event.values[0] + "\n");
         }
     }
 
@@ -432,33 +465,6 @@ public class MainActivity extends WearableActivity implements SensorEventListene
         }
     }
 
-    // Creates a new file via the Drive REST API.
-    private void createFile()
-    {
-        if (mDriveServiceHelper != null)
-        {
-            Log.d(TAG, "Creating a file.");
-
-            mDriveServiceHelper.createFile()
-                    .addOnSuccessListener(new OnSuccessListener<String>()
-                    {
-                        @Override
-                        public void onSuccess(String fileId)
-                        {
-                            readFile(fileId);
-                        }
-                    })
-                    .addOnFailureListener(new OnFailureListener()
-                    {
-                        @Override
-                        public void onFailure(@NonNull Exception exception)
-                        {
-                            Log.e(TAG, "Couldn't create file.", exception);
-                        }
-                    });
-        }
-    }
-
     // Retrieves the title and content of a file identified by {@code fileID} and populates the UI.
     private void readFile(final String fileID)
     {
@@ -478,7 +484,7 @@ public class MainActivity extends WearableActivity implements SensorEventListene
                             // mFileTitleEditText.setText(name);
                             // mDocContentEditText.setText(content);
 
-                            mOpenFileID = fileID;
+                            // mOpenFileID = fileID;
                         }
                     })
                     .addOnFailureListener(new OnFailureListener()
@@ -492,23 +498,53 @@ public class MainActivity extends WearableActivity implements SensorEventListene
         }
     }
 
-    // Saves currently opened file created by {@link #createFile()} if one exists.
-    private void saveFile()
+    // Creates a new file via the Drive REST API.
+    private void createFile(final int sensorType)
     {
-        if (mDriveServiceHelper != null && mOpenFileID != null)
+        if (mDriveServiceHelper != null)
         {
-            Log.d(TAG, "Saving " + mOpenFileID);
+            Log.d(TAG, "Creating a file.");
 
-            if(ConfigActivity.ACC)
-                fileName = getTimeStamp() + "Accelerometer.txt" ;
-            else if(ConfigActivity.HR)
-                fileName = getTimeStamp() + "Heart Rate.txt" ;
-            else
-                fileName = getTimeStamp() + "Other.txt";
+            mDriveServiceHelper.createFile()
+                    .addOnSuccessListener(new OnSuccessListener<String>()
+                    {
+                        @Override
+                        public void onSuccess(String fileId)
+                        {
+                            switch (sensorType)
+                            {
+                                case 1: // Accelerometer
+                                {
+                                    accFileID = fileId;
+                                    break;
+                                }
+                                case 21: // Heart rate sensor
+                                {
+                                    hrFileID = fileId;
+                                    break;
+                                }
+                            }
+                        }
+                    })
+                    .addOnFailureListener(new OnFailureListener()
+                    {
+                        @Override
+                        public void onFailure(@NonNull Exception exception)
+                        {
+                            Log.e(TAG, "Couldn't create file.", exception);
+                        }
+                    });
+        }
+    }
 
-            String fileContent = sensorData.toString();
+    // Saves currently opened file created by {@link #createFile()} if one exists.
+    private void saveFile(String fileName, String fileContent, String fileID)
+    {
+        if (mDriveServiceHelper != null && fileID != null)
+        {
+            Log.d(TAG, "Saving " + fileID);
 
-            mDriveServiceHelper.saveFile(mOpenFileID, fileName, fileContent)
+            mDriveServiceHelper.saveFile(fileID, fileName, fileContent)
                     .addOnFailureListener(new OnFailureListener()
                     {
                         @Override
@@ -520,7 +556,7 @@ public class MainActivity extends WearableActivity implements SensorEventListene
         }
     }
 
-    // Returns current timestamp as a string.
+    // Returns current timestamp as a string in date and time.
     public static String getTimeStamp()
     {
         Date date = new Date();
@@ -531,6 +567,45 @@ public class MainActivity extends WearableActivity implements SensorEventListene
         return ts.toString();
     }
 
+    // Gets time only for data collection
+    public static String getTimeOnly()
+    {
+        String time = getTimeStamp();
+        return time.substring(11, 21);
+    }
 
+    private void checkPermissions()
+    {
+        if ((ContextCompat.checkSelfPermission(this, Manifest.permission.INTERNET) != PackageManager.PERMISSION_GRANTED)) // Permission not granted
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.INTERNET}, REQUEST_CODE_PERMISSION_INTERNET);
 
+        if ((ContextCompat.checkSelfPermission(this, Manifest.permission.BODY_SENSORS) != PackageManager.PERMISSION_GRANTED)) // Permission not granted
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.BODY_SENSORS}, REQUEST_CODE_PERMISSION_SENSORS);
+
+        return;
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults)
+    {
+        switch (requestCode)
+        {
+            case REQUEST_CODE_PERMISSION_INTERNET:
+            {
+                if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED)
+                {
+                    // Permission was granted
+                    return;
+                }
+            }
+            case REQUEST_CODE_PERMISSION_SENSORS:
+            {
+                if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED)
+                {
+                    // Permission was granted
+                    return;
+                }
+            }
+        }
+    }
 }
