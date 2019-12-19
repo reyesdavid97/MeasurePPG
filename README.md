@@ -9,7 +9,7 @@ Version 1.0 of the app is installed onto Android smartwatches using Android Stud
 - Select or create a project for Google Sign-in.
 - Select Android from the drop-down menu.
 - Enter “com.example.measureppg” for the package name.
-- Enter SHA1 signing certificate you obtained from the signingReport earlier.
+- Enter SHA1 signing certificate that you obtained from the signingReport earlier.
 - Press create.
 
 Video: https://www.youtube.com/watch?v=u_ameCYORHY
